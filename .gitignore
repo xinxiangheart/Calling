@@ -104,3 +104,7 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# ===== 行动卡设计工具 =====
+# 便携版 Python（32 MB），通过 tools/README.md 重新获取
+dungeon-card-design/tools/python/
