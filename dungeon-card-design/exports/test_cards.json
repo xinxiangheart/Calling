@@ -1,0 +1,256 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-09-11T16:06:56+08:00",
+  "source": {
+    "canvas": "canvases/test_cards.canvas",
+    "filename": "test_cards.canvas",
+    "bytes": 1783
+  },
+  "field_spec": [
+    {
+      "key": "name",
+      "label": "卡名"
+    },
+    {
+      "key": "rarity",
+      "label": "品级"
+    },
+    {
+      "key": "category",
+      "label": "类别"
+    },
+    {
+      "key": "effect",
+      "label": "效果"
+    },
+    {
+      "key": "variables",
+      "label": "变量"
+    },
+    {
+      "key": "drawback",
+      "label": "负面"
+    },
+    {
+      "key": "acquisition",
+      "label": "获取"
+    },
+    {
+      "key": "evolution",
+      "label": "进化"
+    },
+    {
+      "key": "design_intent",
+      "label": "设计意图"
+    }
+  ],
+  "stats": {
+    "nodes": 3,
+    "text_nodes": 3,
+    "group_nodes": 0,
+    "other_nodes": 0,
+    "edges": 2,
+    "warnings": 0
+  },
+  "cards": [
+    {
+      "id": "card-huomiao",
+      "type": "text",
+      "name": "火苗斩",
+      "rarity": "普通",
+      "category": "攻击",
+      "effect": "造成 2 点伤害。",
+      "variables": {
+        "raw": "伤害:2; 费用:1",
+        "items": {
+          "伤害": "2",
+          "费用": "1"
+        },
+        "unparsed": []
+      },
+      "drawback": "无",
+      "acquisition": "初始牌组",
+      "evolution": {
+        "raw": "烈焰斩",
+        "targets": [
+          "烈焰斩"
+        ]
+      },
+      "design_intent": "最基础的输出牌，用来教学与兜底。",
+      "extra_fields": {},
+      "missing_fields": [],
+      "raw_text": "【卡名】火苗斩\n【品级】普通\n【类别】攻击\n【效果】造成 2 点伤害。\n【变量】伤害:2; 费用:1\n【负面】无\n【获取】初始牌组\n【进化】烈焰斩\n【设计意图】最基础的输出牌，用来教学与兜底。",
+      "color": "4",
+      "position": {
+        "x": -420,
+        "y": 0
+      },
+      "size": {
+        "width": 300,
+        "height": 200
+      },
+      "parent_group": null,
+      "outgoing": [
+        "edge-huo-lie"
+      ],
+      "incoming": [],
+      "evolution_target_ids": [
+        "card-lieyan"
+      ],
+      "children": [
+        "card-lieyan"
+      ]
+    },
+    {
+      "id": "card-lieyan",
+      "type": "text",
+      "name": "烈焰斩",
+      "rarity": "稀有",
+      "category": "攻击",
+      "effect": "造成 5 点伤害；若目标带有「灼烧」，改为造成 8 点伤害。",
+      "variables": {
+        "raw": "伤害:5; 灼烧伤害:8; 费用:2",
+        "items": {
+          "伤害": "5",
+          "灼烧伤害": "8",
+          "费用": "2"
+        },
+        "unparsed": []
+      },
+      "drawback": "本回合无法再打出攻击牌。",
+      "acquisition": "第三章商店",
+      "evolution": {
+        "raw": "烈焰斩+",
+        "targets": [
+          "烈焰斩+"
+        ]
+      },
+      "design_intent": "灼烧体系的核心兑现点。",
+      "extra_fields": {},
+      "missing_fields": [],
+      "raw_text": "【卡名】烈焰斩\n【品级】稀有\n【类别】攻击\n【效果】造成 5 点伤害；若目标带有「灼烧」，改为造成 8 点伤害。\n【变量】伤害:5; 灼烧伤害:8; 费用:2\n【负面】本回合无法再打出攻击牌。\n【获取】第三章商店\n【进化】烈焰斩+\n【设计意图】灼烧体系的核心兑现点。",
+      "color": "2",
+      "position": {
+        "x": -40,
+        "y": 0
+      },
+      "size": {
+        "width": 300,
+        "height": 220
+      },
+      "parent_group": null,
+      "outgoing": [
+        "edge-lie-plus"
+      ],
+      "incoming": [
+        "edge-huo-lie"
+      ],
+      "evolution_target_ids": [
+        "card-lieyan-plus"
+      ],
+      "children": [
+        "card-lieyan-plus"
+      ]
+    },
+    {
+      "id": "card-lieyan-plus",
+      "type": "text",
+      "name": "烈焰斩+",
+      "rarity": "史诗",
+      "category": "攻击",
+      "effect": "造成 8 点伤害；对带有「灼烧」的目标额外触发一次灼烧结算。",
+      "variables": {
+        "raw": "伤害:8; 灼烧层数:2; 费用:2",
+        "items": {
+          "伤害": "8",
+          "灼烧层数": "2",
+          "费用": "2"
+        },
+        "unparsed": []
+      },
+      "drawback": "使用后失去 2 点生命。",
+      "acquisition": "由【烈焰斩】进化",
+      "evolution": {
+        "raw": null,
+        "targets": []
+      },
+      "design_intent": "让灼烧流在中后期仍然有爆发上限。",
+      "extra_fields": {},
+      "missing_fields": [],
+      "raw_text": "【卡名】烈焰斩+\n【品级】史诗\n【类别】攻击\n【效果】造成 8 点伤害；对带有「灼烧」的目标额外触发一次灼烧结算。\n【变量】伤害:8; 灼烧层数:2; 费用:2\n【负面】使用后失去 2 点生命。\n【获取】由【烈焰斩】进化\n【进化】无\n【设计意图】让灼烧流在中后期仍然有爆发上限。",
+      "color": "6",
+      "position": {
+        "x": 340,
+        "y": 0
+      },
+      "size": {
+        "width": 300,
+        "height": 220
+      },
+      "parent_group": null,
+      "outgoing": [],
+      "incoming": [
+        "edge-lie-plus"
+      ],
+      "evolution_target_ids": [],
+      "children": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-huo-lie",
+      "from": "card-huomiao",
+      "to": "card-lieyan",
+      "label": "进化",
+      "from_side": "right",
+      "to_side": "left",
+      "color": null
+    },
+    {
+      "id": "edge-lie-plus",
+      "from": "card-lieyan",
+      "to": "card-lieyan-plus",
+      "label": "进化",
+      "from_side": "right",
+      "to_side": "left",
+      "color": null
+    }
+  ],
+  "adjacency": {
+    "out": {
+      "card-huomiao": [
+        "edge-huo-lie"
+      ],
+      "card-lieyan": [
+        "edge-lie-plus"
+      ],
+      "card-lieyan-plus": []
+    },
+    "in": {
+      "card-huomiao": [],
+      "card-lieyan": [
+        "edge-huo-lie"
+      ],
+      "card-lieyan-plus": [
+        "edge-lie-plus"
+      ]
+    }
+  },
+  "forest": [
+    {
+      "id": "card-huomiao",
+      "children": [
+        {
+          "id": "card-lieyan",
+          "children": [
+            {
+              "id": "card-lieyan-plus",
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

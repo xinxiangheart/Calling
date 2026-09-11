@@ -1,0 +1,6 @@
+python312.zip
+.
+Lib\site-packages
+
+# 启用 site.main()，pip 依赖它把 site-packages 挂到 sys.path
+import site

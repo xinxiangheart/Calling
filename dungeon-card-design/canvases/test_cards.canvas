@@ -1,0 +1,52 @@
+{
+	"nodes": [
+		{
+			"id": "card-huomiao",
+			"type": "text",
+			"text": "【卡名】火苗斩\n【品级】普通\n【类别】攻击\n【效果】造成 2 点伤害。\n【变量】伤害:2; 费用:1\n【负面】无\n【获取】初始牌组\n【进化】烈焰斩\n【设计意图】最基础的输出牌，用来教学与兜底。",
+			"x": -420,
+			"y": 0,
+			"width": 300,
+			"height": 200,
+			"color": "4"
+		},
+		{
+			"id": "card-lieyan",
+			"type": "text",
+			"text": "【卡名】烈焰斩\n【品级】稀有\n【类别】攻击\n【效果】造成 5 点伤害；若目标带有「灼烧」，改为造成 8 点伤害。\n【变量】伤害:5; 灼烧伤害:8; 费用:2\n【负面】本回合无法再打出攻击牌。\n【获取】第三章商店\n【进化】烈焰斩+\n【设计意图】灼烧体系的核心兑现点。",
+			"x": -40,
+			"y": 0,
+			"width": 300,
+			"height": 220,
+			"color": "2"
+		},
+		{
+			"id": "card-lieyan-plus",
+			"type": "text",
+			"text": "【卡名】烈焰斩+\n【品级】史诗\n【类别】攻击\n【效果】造成 8 点伤害；对带有「灼烧」的目标额外触发一次灼烧结算。\n【变量】伤害:8; 灼烧层数:2; 费用:2\n【负面】使用后失去 2 点生命。\n【获取】由【烈焰斩】进化\n【进化】无\n【设计意图】让灼烧流在中后期仍然有爆发上限。",
+			"x": 340,
+			"y": 0,
+			"width": 300,
+			"height": 220,
+			"color": "6"
+		}
+	],
+	"edges": [
+		{
+			"id": "edge-huo-lie",
+			"fromNode": "card-huomiao",
+			"fromSide": "right",
+			"toNode": "card-lieyan",
+			"toSide": "left",
+			"label": "进化"
+		},
+		{
+			"id": "edge-lie-plus",
+			"fromNode": "card-lieyan",
+			"fromSide": "right",
+			"toNode": "card-lieyan-plus",
+			"toSide": "left",
+			"label": "进化"
+		}
+	]
+}
