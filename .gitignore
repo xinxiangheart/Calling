@@ -108,3 +108,5 @@ InitTestScene*.unity*
 # ===== 行动卡设计工具 =====
 # 便携版 Python（32 MB），通过 tools/README.md 重新获取
 dungeon-card-design/tools/python/
+# 每次导出都会重写的索引文件（列表页用，不是设计数据）
+dungeon-card-design/exports/_index.json

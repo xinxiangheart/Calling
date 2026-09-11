@@ -5,7 +5,11 @@ using UnityEngine.UIElements;
 
 namespace DungeonCardDesign.EditorTools
 {
-    /// <summary>一张行动卡在 GraphView 里的节点表示。</summary>
+    /// <summary>
+    /// 一张行动卡在 GraphView 里的节点表示。
+    /// 这里是只读展示，所有编辑都在窗口右侧的面板里做——
+    /// 节点内塞 TextField 会抢走节点的拖拽和选择事件，反而不好用。
+    /// </summary>
     public class CardNodeView : Node
     {
         readonly CardData _card;
@@ -18,12 +22,16 @@ namespace DungeonCardDesign.EditorTools
         public Port InputPort { get; private set; }
         public Port OutputPort { get; private set; }
 
-        public Action<CardData> OnSelected;
+        /// <summary>点选时回调，用来把右侧编辑面板切到这张卡。</summary>
+        /// <remarks>加 new 是因为 GraphElement 上有个同名的 OnSelected() 虚方法，不加会报 CS0108。</remarks>
+        public new Action<CardData> OnSelected;
+
+        /// <summary>双击时回调，用来打开「战斗内升级」填写窗口。</summary>
+        public Action<CardData> OnUpgradeRequested;
 
         public CardNodeView(CardData card, bool withPorts)
         {
             _card = card;
-            title = card.DisplayName;
             name = card.id;
             viewDataKey = card.id;
 
@@ -47,14 +55,42 @@ namespace DungeonCardDesign.EditorTools
                 outputContainer.Add(OutputPort);
             }
 
+            RefreshTitle();
             RefreshExpandedState();
             RefreshPorts();
 
             RegisterCallback<MouseDownEvent>(OnMouseDown);
         }
 
+        /// <summary>内存模型被改过之后刷新节点显示（标题 + 正文）。</summary>
+        public void RefreshFromCard()
+        {
+            RefreshTitle();
+            extensionContainer.Clear();
+            extensionContainer.Add(BuildBody());
+            RefreshExpandedState();
+            RefreshPorts();
+        }
+
+        void RefreshTitle()
+        {
+            // 已填战斗内升级的卡在标题上加个记号，一眼能扫出来
+            title = string.IsNullOrEmpty(_card.combat_upgrade)
+                ? _card.DisplayName
+                : _card.DisplayName + "  ⚔";
+        }
+
         void OnMouseDown(MouseDownEvent evt)
         {
+            if (evt.clickCount == 2)
+            {
+                if (OnUpgradeRequested != null)
+                {
+                    OnUpgradeRequested(_card);
+                }
+                return;
+            }
+
             if (OnSelected != null)
             {
                 OnSelected(_card);
@@ -88,34 +124,30 @@ namespace DungeonCardDesign.EditorTools
 
             if (_card.IsGroup)
             {
-                AddRow(body, "分组", _card.DisplayName);
+                AddRow(body, "分组", _card.DisplayName, null);
                 return body;
             }
 
-            AddRow(body, "品级", _card.rarity);
-            AddRow(body, "类别", _card.category);
-            AddRow(body, "效果", _card.effect);
+            AddRow(body, "品级", _card.rarity, null);
+            AddRow(body, "类别", _card.category, null);
+            AddRow(body, "效果", _card.effect, null);
             if (_card.variables != null && !string.IsNullOrEmpty(_card.variables.raw))
             {
-                AddRow(body, "变量", _card.variables.raw);
+                AddRow(body, "变量", _card.variables.raw, null);
             }
-            AddRow(body, "负面", _card.drawback);
-            AddRow(body, "获取", _card.acquisition);
-            if (_card.evolution != null && _card.evolution.targets != null && _card.evolution.targets.Length > 0)
-            {
-                AddRow(body, "进化", string.Join(" / ", _card.evolution.targets));
-            }
-            AddRow(body, "意图", _card.design_intent);
+            AddRow(body, "获取", _card.acquisition, null);
+            AddRow(body, "意图", _card.design_intent, null);
+            AddRow(body, "升级", _card.combat_upgrade, new Color(0.95f, 0.78f, 0.35f));
 
             if (_card.missing_fields != null && _card.missing_fields.Length > 0)
             {
-                AddRow(body, "缺失", string.Join("、", _card.missing_fields));
+                AddRow(body, "缺失", string.Join("、", _card.missing_fields), new Color(0.95f, 0.55f, 0.45f));
             }
 
             return body;
         }
 
-        static void AddRow(VisualElement parent, string label, string value)
+        static void AddRow(VisualElement parent, string label, string value, Color? valueColor)
         {
             if (string.IsNullOrEmpty(value))
             {
@@ -137,7 +169,7 @@ namespace DungeonCardDesign.EditorTools
             val.style.fontSize = 11f;
             val.style.flexShrink = 1f;
             val.style.whiteSpace = WhiteSpace.Normal;
-            val.style.color = new StyleColor(new Color(0.86f, 0.88f, 0.92f));
+            val.style.color = new StyleColor(valueColor ?? new Color(0.86f, 0.88f, 0.92f));
             row.Add(val);
 
             parent.Add(row);

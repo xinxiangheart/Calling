@@ -1,50 +1,50 @@
 {
 	"nodes": [
 		{
-			"id": "card-huomiao",
+			"id": "card-zhongji",
 			"type": "text",
-			"text": "【卡名】火苗斩\n【品级】普通\n【类别】攻击\n【效果】造成 2 点伤害。\n【变量】伤害:2; 费用:1\n【负面】无\n【获取】初始牌组\n【进化】烈焰斩\n【设计意图】最基础的输出牌，用来教学与兜底。",
+			"text": "【卡名】重击\n【品级】普通\n【类别】攻击\n【效果】造成 {伤害} 点伤害\n【变量】伤害_Lv1 = 2; 伤害_Lv2 = 3; 伤害_Lv3 = 4\n【获取】初始 / 普通怪掉落\n【设计意图】基础单次高伤卡。",
 			"x": -420,
 			"y": 0,
-			"width": 300,
-			"height": 200,
+			"width": 320,
+			"height": 220,
 			"color": "4"
 		},
 		{
-			"id": "card-lieyan",
+			"id": "card-zhongjieji",
 			"type": "text",
-			"text": "【卡名】烈焰斩\n【品级】稀有\n【类别】攻击\n【效果】造成 5 点伤害；若目标带有「灼烧」，改为造成 8 点伤害。\n【变量】伤害:5; 灼烧伤害:8; 费用:2\n【负面】本回合无法再打出攻击牌。\n【获取】第三章商店\n【进化】烈焰斩+\n【设计意图】灼烧体系的核心兑现点。",
+			"text": "【卡名】终结技\n【品级】稀有\n【类别】攻击\n【效果】造成 {伤害} 点伤害，对自己造成 {自伤} 点真实伤害\n【变量】伤害_Lv1 = 3\n【变量】伤害_Lv2 = 4\n【变量】伤害_Lv3 = 5\n【变量】自伤_Lv1 = 3\n【变量】自伤_Lv2 = 5\n【变量】自伤_Lv3 = 8\n【获取】猛击×2 进化\n【设计意图】斩杀型高伤卡，代价是自伤。",
 			"x": -40,
 			"y": 0,
-			"width": 300,
-			"height": 220,
+			"width": 320,
+			"height": 290,
 			"color": "2"
 		},
 		{
-			"id": "card-lieyan-plus",
+			"id": "card-tianzhui",
 			"type": "text",
-			"text": "【卡名】烈焰斩+\n【品级】史诗\n【类别】攻击\n【效果】造成 8 点伤害；对带有「灼烧」的目标额外触发一次灼烧结算。\n【变量】伤害:8; 灼烧层数:2; 费用:2\n【负面】使用后失去 2 点生命。\n【获取】由【烈焰斩】进化\n【进化】无\n【设计意图】让灼烧流在中后期仍然有爆发上限。",
+			"text": "【卡名】天坠\n【品级】传说\n【类别】攻击\n【效果】造成 {伤害} 点伤害，无视护甲，必中，对自己造成 {自伤} 点真实伤害\n【变量】伤害 = 5; 自伤 = 15\n【获取】终结技×2 进化\n【设计意图】终极核弹。",
 			"x": 340,
 			"y": 0,
-			"width": 300,
-			"height": 220,
+			"width": 320,
+			"height": 240,
 			"color": "6"
 		}
 	],
 	"edges": [
 		{
-			"id": "edge-huo-lie",
-			"fromNode": "card-huomiao",
+			"id": "edge-zhongji-jie",
+			"fromNode": "card-zhongji",
 			"fromSide": "right",
-			"toNode": "card-lieyan",
+			"toNode": "card-zhongjieji",
 			"toSide": "left",
 			"label": "进化"
 		},
 		{
-			"id": "edge-lie-plus",
-			"fromNode": "card-lieyan",
+			"id": "edge-jie-tian",
+			"fromNode": "card-zhongjieji",
 			"fromSide": "right",
-			"toNode": "card-lieyan-plus",
+			"toNode": "card-tianzhui",
 			"toSide": "left",
 			"label": "进化"
 		}

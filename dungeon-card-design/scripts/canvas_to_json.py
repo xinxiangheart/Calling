@@ -24,12 +24,14 @@ Obsidian 的 .canvas 文件本身就是 JSON，结构如下::
     【卡名】烈焰斩
     【品级】稀有
     【类别】攻击
-    【效果】造成 3 点伤害。
-    【变量】伤害:3; 冷却:2
-    【负面】自身失去 1 点生命
+    【效果】造成 3 点伤害；自身失去 1 点生命。
+    【变量】伤害:3; 自伤:1
     【获取】商店
-    【进化】烈焰斩+ / 烈焰斩++
     【设计意图】前期的核心输出手段。
+
+注意：【负面】与【进化】已取消。【负面】的代价直接写进【效果】，
+用 ``{变量}`` 表达数值；【进化】关系改由画布连线表达（见 ``edges``）。
+老画布里残留的这两行会被静默忽略，不报错也不出现在导出结果里。
 
 用法::
 
@@ -67,18 +69,20 @@ FIELD_SPEC: Tuple[Tuple[str, str], ...] = (
     ("category", "类别"),
     ("effect", "效果"),
     ("variables", "变量"),
-    ("drawback", "负面"),
     ("acquisition", "获取"),
-    ("evolution", "进化"),
     ("design_intent", "设计意图"),
 )
 FIELD_KEY_BY_LABEL: Dict[str, str] = {label: key for key, label in FIELD_SPEC}
 FIELD_LABEL_BY_KEY: Dict[str, str] = {key: label for key, label in FIELD_SPEC}
 
+# 已取消的字段标记。识别它们只是为了「不报警、不输出」：
+# 【负面】合并进【效果】，【进化】改由画布连线表达。
+# 老画布里残留的这些行会被静默丢弃，原文仍完整保留在 raw_text 里。
+IGNORED_FIELD_LABELS = frozenset(("负面", "进化"))
+
 FIELD_MARKER = re.compile(r"【\s*(?P<label>[^【】\n]+?)\s*】")
 VARIABLE_ITEM_SPLIT = re.compile(r"[;；\n]+")
 VARIABLE_PAIR_SPLIT = re.compile(r"[:：=]", re.UNICODE)
-EVOLUTION_SPLIT = re.compile(r"[;；,，、/\n]+")
 
 # 这些写法等价于「没有填」，解析时按空值处理，避免刷出无意义的告警
 PLACEHOLDER_VALUES = {"", "无", "无。", "none", "n/a", "na", "-", "--", "—", "空"}
@@ -114,6 +118,13 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
     只有命中 ``FIELD_SPEC`` 的【标记】才会切出新字段，所以正文里引用别的卡名
     （例如「由【烈焰斩】进化」）不会被误判成字段，会原样留在当前字段值里。
     出现在行首的未知【标记】仍按字段处理并给出告警，便于发现字段名写错。
+
+    【变量】是唯一允许多行出现的字段：多行按出现顺序累积后用 ``;`` 连接，
+    再交给 :func:`parse_variables` 统一解析，不会被后面的行覆盖掉。
+    单行写法（本身就用 ``;`` 分隔）走的是同一条路径，两种写法结果一致。
+
+    ``IGNORED_FIELD_LABELS`` 里的【标记】（当前是【负面】和【进化】）在行首出现时
+    会被整段吃掉、既不报错也不写进结果——它们已从字段规范里取消。
     """
     warnings: List[str] = []
     fields: Dict[str, Any] = {}
@@ -133,15 +144,27 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
         return fields, extra, warnings
 
     seen: Dict[str, int] = {}
+    variable_parts: List[str] = []
+    variable_seen = False
     for index, (marker_start, value_start, label, key) in enumerate(entries):
         end = entries[index + 1][0] if index + 1 < len(entries) else len(text)
         value = text[value_start:end].strip()
         if key is None:
+            if label in IGNORED_FIELD_LABELS:
+                # 已取消字段：识别出来只为不报警，值直接丢弃（raw_text 里还能翻到原文）
+                continue
             extra[label] = value
             warnings.append(
                 "第 %d 行的【%s】不是已知字段，已归入 extra_fields（检查字段名是否写错）"
                 % (_line_number(text, marker_start), label)
             )
+            continue
+        if key == "variables":
+            # 多行【变量】：这里只累积，等全部字段扫完再统一拼；
+            # 因此不会触发下面的「重复覆盖」告警。
+            variable_seen = True
+            if value:
+                variable_parts.append(value)
             continue
         seen[key] = seen.get(key, 0) + 1
         if seen[key] > 1:
@@ -149,6 +172,10 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
                 "字段【%s】重复出现，后面的值覆盖了前面的值" % FIELD_LABEL_BY_KEY[key]
             )
         fields[key] = value
+
+    if variable_seen:
+        # 用 ; 连接后交给 parse_variables，输出顺序与源文件中的出现顺序一致
+        fields["variables"] = "; ".join(variable_parts)
 
     return fields, extra, warnings
 
@@ -169,18 +196,6 @@ def parse_variables(raw: Optional[str]) -> Dict[str, Any]:
         else:
             unparsed.append(chunk)
     return {"raw": raw, "items": items, "unparsed": unparsed}
-
-
-def parse_evolution(raw: Optional[str]) -> Dict[str, Any]:
-    """把 "烈焰斩+ / 烈焰斩++" 解析成目标名字列表。"""
-    if is_placeholder(raw):
-        return {"raw": None, "targets": []}
-    targets = [
-        part.strip()
-        for part in EVOLUTION_SPLIT.split(raw)
-        if part.strip() and not is_placeholder(part)
-    ]
-    return {"raw": raw, "targets": targets}
 
 
 def parse_name_from_unknown_text(text: str) -> Optional[str]:
@@ -293,9 +308,7 @@ def build_card(
         "category": fields.get("category"),
         "effect": fields.get("effect"),
         "variables": parse_variables(fields.get("variables")),
-        "drawback": fields.get("drawback"),
         "acquisition": fields.get("acquisition"),
-        "evolution": parse_evolution(fields.get("evolution")),
         "design_intent": fields.get("design_intent"),
         "extra_fields": extra,
         "missing_fields": missing,
@@ -306,7 +319,6 @@ def build_card(
         "parent_group": parent_of.get(node_id),
         "outgoing": [],
         "incoming": [],
-        "evolution_target_ids": [],
         "children": [],
     }
 
@@ -354,28 +366,6 @@ def build_edge(
         "color": edge.get("color"),
     }
     return record, warnings
-
-
-def link_evolution_targets(cards: Sequence[Dict[str, Any]]) -> List[str]:
-    """把【进化】里写的卡名解析回节点 id。"""
-    warnings: List[str] = []
-    by_name: Dict[str, str] = {}
-    for card in cards:
-        name = card.get("name")
-        if name:
-            by_name.setdefault(str(name).strip(), card["id"])
-    for card in cards:
-        for target in card["evolution"]["targets"]:
-            target_id = by_name.get(target.strip())
-            if target_id is None:
-                warnings.append(
-                    "卡片 %s 的【进化】指向 %r，但在画布中找不到同名节点"
-                    % (card["id"], target)
-                )
-                continue
-            if target_id not in card["evolution_target_ids"]:
-                card["evolution_target_ids"].append(target_id)
-    return warnings
 
 
 def build_forest(cards: Sequence[Dict[str, Any]], edges: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -484,8 +474,6 @@ def convert(canvas_path: Path, canvas_dir: Optional[Path], data: Dict[str, Any])
         record, edge_warnings = build_edge(edge, index, known_ids)
         warnings.extend(edge_warnings)
         edge_records.append(record)
-
-    warnings.extend(link_evolution_targets(cards))
 
     by_id = {card["id"]: card for card in cards}
     for edge in edge_records:

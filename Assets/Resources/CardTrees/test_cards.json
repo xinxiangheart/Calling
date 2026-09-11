@@ -1,0 +1,19 @@
+{
+    "schema_version": "1.0",
+    "generated_at": "2026-09-11T18:09:44+08:00",
+    "source": {
+        "canvas": "canvases/test_cards.canvas",
+        "filename": "test_cards.json",
+        "bytes": 0
+    },
+    "stats": {
+        "nodes": 0,
+        "text_nodes": 0,
+        "group_nodes": 0,
+        "other_nodes": 0,
+        "edges": 0,
+        "warnings": 0
+    },
+    "cards": [],
+    "edges": []
+}
