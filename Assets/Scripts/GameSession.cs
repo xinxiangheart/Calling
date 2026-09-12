@@ -16,12 +16,8 @@ public static class GameSession
     /// </summary>
     public static string DisplayName(CharacterId id)
     {
-        switch (id)
-        {
-            case CharacterId.Rogue: return "莉拉";
-            case CharacterId.Alchemist: return "诺姆";
-            case CharacterId.Gambler: return "卡珊德拉";
-            default: return "格雷";
-        }
+        // 名字只在 CharacterDatabase 里存一份，这里留个顺手的入口，
+        // 免得每个 UI 都去摸一遍数据库
+        return CharacterDatabase.Get(id).displayName;
     }
 }
