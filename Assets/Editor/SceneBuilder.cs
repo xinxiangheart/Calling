@@ -18,6 +18,9 @@ using UnityEngine.UI;
 /// 放在 Assets/Editor 根目录（而不是 Assets/Editor/CardTree）是有意的：
 /// 那边有 DungeonCardDesign.Editor.asmdef，进了那个程序集就看不见
 /// Assembly-CSharp 里的 MainMenuController。
+///
+/// 下面那些搭界面的零件（Region / Place / NewText / AddBackground ...）是 public 的：
+/// 卡面预制体生成器 CardFaceBuilder 复用同一套，省得两处各写一份、改一处忘一处。
 /// </summary>
 public static class SceneBuilder
 {
@@ -452,7 +455,7 @@ public static class SceneBuilder
     ///
     /// 同名区域已存在就直接复用（就地生成的关键，见 FindOrCreateUI）。
     /// </summary>
-    static RectTransform Region(string name, Transform parent, float left, float top, float width, float height)
+    public static RectTransform Region(string name, Transform parent, float left, float top, float width, float height)
     {
         RectTransform rect = FindOrCreateUI(name, parent);
         Place(rect, new Vector2(0f, 1f), new Vector2(width, height), new Vector2(left, -top));
@@ -494,14 +497,14 @@ public static class SceneBuilder
     /// 复用同一个物体时组件只能加一次：已经有了就拿现成的。
     /// 直接 AddComponent 会撞上 Unity 对重复组件的报错。
     /// </summary>
-    static T EnsureComponent<T>(GameObject go) where T : Component
+    public static T EnsureComponent<T>(GameObject go) where T : Component
     {
         T existing = go.GetComponent<T>();
         return existing != null ? existing : go.AddComponent<T>();
     }
 
     /// <summary>给一块区域加底色。默认不吃点击，免得挡住底下的按钮。</summary>
-    static Image AddBackground(RectTransform rect, Color color)
+    public static Image AddBackground(RectTransform rect, Color color)
     {
         var image = EnsureComponent<Image>(rect.gameObject);
         image.color = color;
@@ -666,7 +669,7 @@ public static class SceneBuilder
     /// 相机：没有才建。已经有就只补 AudioListener，不动它的设置 ——
     /// 手动调过的背景色不该被生成流程冲掉。
     /// </summary>
-    static void EnsureCamera()
+    public static void EnsureCamera()
     {
         GameObject go = FindOrCreateRoot("Main Camera");
 
@@ -688,7 +691,7 @@ public static class SceneBuilder
     }
 
     /// <summary>UI 按钮要靠它才能收到点击，场景里必须有一个。</summary>
-    static void EnsureEventSystem()
+    public static void EnsureEventSystem()
     {
         GameObject go = FindOrCreateRoot("EventSystem");
         EnsureComponent<EventSystem>(go);
@@ -706,7 +709,7 @@ public static class SceneBuilder
     /// 缩放参数每次生成都会按 1920x1080 重设 —— 版面是按这个尺寸摆的绝对像素，
     /// 这里被改过就对不齐了。
     /// </summary>
-    static GameObject EnsureCanvas()
+    public static GameObject EnsureCanvas()
     {
         GameObject go = FindOrCreateRoot("Canvas");
         if (go.GetComponent<RectTransform>() == null)
@@ -741,7 +744,7 @@ public static class SceneBuilder
         return go;
     }
 
-    static void Stretch(RectTransform rt)
+    public static void Stretch(RectTransform rt)
     {
         rt.anchorMin = Vector2.zero;
         rt.anchorMax = Vector2.one;
@@ -750,7 +753,7 @@ public static class SceneBuilder
     }
 
     /// <summary>锚点和轴心设成同一点，这样 anchoredPosition 就是「离这个锚点多远」。</summary>
-    static void Place(RectTransform rt, Vector2 anchor, Vector2 size, Vector2 anchoredPosition)
+    public static void Place(RectTransform rt, Vector2 anchor, Vector2 size, Vector2 anchoredPosition)
     {
         rt.anchorMin = anchor;
         rt.anchorMax = anchor;
@@ -759,7 +762,7 @@ public static class SceneBuilder
         rt.anchoredPosition = anchoredPosition;
     }
 
-    static TextMeshProUGUI NewText(
+    public static TextMeshProUGUI NewText(
         string name, Transform parent, string content, float size, TextAlignmentOptions alignment)
     {
         GameObject go = FindOrCreateUI(name, parent).gameObject;
@@ -838,7 +841,7 @@ public static class SceneBuilder
     /// TMP 的文字要能显示，必须先导入 TMP Essential Resources，
     /// 否则场景里所有文字都是空白。没导入就问一句，顺手导掉。
     /// </summary>
-    static bool EnsureTmpEssentials()
+    public static bool EnsureTmpEssentials()
     {
         if (Resources.Load<TMP_Settings>("TMP Settings") != null)
         {
