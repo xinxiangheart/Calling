@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -87,6 +88,238 @@ namespace DungeonCardDesign.EditorTools
         public int warnings;
     }
 
+    // ------------------------------------------------------------------
+    // bindings：Python 导出的派生数据，说明「效果里每一段该怎么着色、
+    // 每个等级分别是多少」。契约见 dungeon-card-design/schema/变量与公式规范.md §5 §6。
+    // 存盘时丢弃（CardTreeStore 里处理），每次导出重新生成。
+    // ------------------------------------------------------------------
+
+    /// <summary>效果文本切出来的一段，kind 决定它在卡面上是什么颜色。</summary>
+    [Serializable]
+    public class EffectSegment
+    {
+        /// <summary>text / card / runtime / error。</summary>
+        public string kind;
+
+        /// <summary>text 与 error 段的原文。error 段保留 {} 原样，便于直接显示。</summary>
+        public string content;
+
+        /// <summary>card / runtime / error 段涉及的变量名。</summary>
+        public string name;
+
+        /// <summary>card 段专用：等级 → 该等级的文本值。</summary>
+        public Dictionary<string, string> levels;
+
+        /// <summary>runtime 段专用：这个量来自哪个来源（player / target / …）。</summary>
+        public string source;
+
+        /// <summary>runtime 段专用：int / float / text。</summary>
+        public string type;
+
+        /// <summary>runtime 段专用：设计期预览用的示例值，运行时不用。</summary>
+        public JToken sample;
+    }
+
+    /// <summary>bindings.variables 的一项：按基础名归并后的变量。</summary>
+    [Serializable]
+    public class BindingVariable
+    {
+        public string key;
+
+        /// <summary>literal / formula / mixed。</summary>
+        public string kind;
+
+        public Dictionary<string, string> levels;
+
+        /// <summary>算式里引用到的本卡变量名。</summary>
+        public string[] refs;
+
+        /// <summary>算式里引用到的运行时量，写成 "来源.名字"。</summary>
+        public string[] runtime_refs;
+    }
+
+    /// <summary>这张卡用到的运行时量，供运行时提前准备取值。</summary>
+    [Serializable]
+    public class RuntimeDep
+    {
+        public string source;
+        public string name;
+        public string type;
+    }
+
+    [Serializable]
+    public class BindingsData
+    {
+        public string[] levels;
+        public List<BindingVariable> variables = new List<BindingVariable>();
+        public List<EffectSegment> effect_segments = new List<EffectSegment>();
+        public List<RuntimeDep> runtime_deps = new List<RuntimeDep>();
+    }
+
+    /// <summary>
+    /// 卡面着色约定（契约 §6）。面板预览、节点视图、将来的运行时卡面共用这一份，
+    /// 要改颜色只改这里，避免三处各写一套色值。
+    /// </summary>
+    public static class CardSegmentPalette
+    {
+        /// <summary>卡内变量：升级会变，设计期已知。</summary>
+        public static readonly Color CardVariable = new Color(0.267f, 0.867f, 0.267f);    // #44DD44
+
+        /// <summary>运行时量：战斗中随时会变。</summary>
+        public static readonly Color RuntimeVariable = new Color(1.000f, 0.667f, 0.000f); // #FFAA00
+
+        /// <summary>解析失败：有问题的占位符。</summary>
+        public static readonly Color Error = new Color(1.000f, 0.267f, 0.267f);           // #FF4444
+
+        /// <summary>按分段种类取色；text 段返回 null，表示该用默认字色。</summary>
+        public static Color? ForKind(string kind)
+        {
+            switch (kind)
+            {
+                case "card": return CardVariable;
+                case "runtime": return RuntimeVariable;
+                case "error": return Error;
+                default: return null;
+            }
+        }
+
+        /// <summary>转成 UI Toolkit 富文本认的 #RRGGBB。</summary>
+        public static string ToHex(Color color)
+        {
+            return string.Format(
+                "#{0:X2}{1:X2}{2:X2}",
+                Mathf.Clamp(Mathf.RoundToInt(color.r * 255f), 0, 255),
+                Mathf.Clamp(Mathf.RoundToInt(color.g * 255f), 0, 255),
+                Mathf.Clamp(Mathf.RoundToInt(color.b * 255f), 0, 255));
+        }
+    }
+
+    /// <summary>
+    /// 把 bindings.effect_segments 拼成带颜色的富文本。
+    ///
+    /// 放在 Runtime 而不是编辑器里，是因为契约 §6 要求「预览和未来的卡面渲染
+    /// 用同一套颜色」——两边共用这个类，就不会出现编辑器一个绿、战斗里另一个绿。
+    /// 输出的是 UI Toolkit 的 &lt;color=#RRGGBB&gt; 标记，TextMeshPro 也认同样的写法。
+    /// </summary>
+    public static class CardSegmentRenderer
+    {
+        /// <summary>
+        /// 按等级拼富文本。level 传 1~3；传 0 表示不分等级，按 Lv.1 渲染。
+        /// hasError 带出「有没有解析失败的段」，调用方据此决定要不要额外提醒。
+        ///
+        /// segments 为空时返回空串，调用方应退回纯文本渲染。
+        /// </summary>
+        public static string ToRichText(
+            IList<EffectSegment> segments, int level, out bool hasError)
+        {
+            hasError = false;
+            if (segments == null || segments.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+            foreach (EffectSegment segment in segments)
+            {
+                if (segment == null)
+                {
+                    continue;
+                }
+
+                switch (segment.kind)
+                {
+                    case "card":
+                        AppendWrapped(builder, CardValue(segment, level), CardSegmentPalette.CardVariable);
+                        break;
+                    case "runtime":
+                        AppendWrapped(builder, RuntimeValue(segment), CardSegmentPalette.RuntimeVariable);
+                        break;
+                    case "error":
+                        hasError = true;
+                        AppendWrapped(builder, SegmentText(segment), CardSegmentPalette.Error);
+                        break;
+                    default:
+                        builder.Append(SegmentText(segment));
+                        break;
+                }
+            }
+            return builder.ToString();
+        }
+
+        /// <summary>某个等级的渲染结果（不含颜色），给需要纯文本的地方用。</summary>
+        public static bool HasError(IList<EffectSegment> segments)
+        {
+            if (segments == null)
+            {
+                return false;
+            }
+            foreach (EffectSegment segment in segments)
+            {
+                if (segment != null && segment.kind == "error")
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static string SegmentText(EffectSegment segment)
+        {
+            return segment.content ?? string.Empty;
+        }
+
+        /// <summary>卡内变量取该等级的值；等级缺了就回退 Lv.1，再不行显示占位符原名。</summary>
+        static string CardValue(EffectSegment segment, int level)
+        {
+            if (segment.levels != null)
+            {
+                string value;
+                if (level > 0
+                    && segment.levels.TryGetValue(level.ToString(CultureInfo.InvariantCulture), out value))
+                {
+                    return value;
+                }
+                if (segment.levels.TryGetValue("1", out value))
+                {
+                    return value;
+                }
+                if (segment.levels.TryGetValue("base", out value))
+                {
+                    return value;
+                }
+            }
+            return Placeholder(segment);
+        }
+
+        /// <summary>运行时量设计期没有真值，用 sample 预览；没有 sample 就显示占位符原名。</summary>
+        static string RuntimeValue(EffectSegment segment)
+        {
+            if (segment.sample != null && segment.sample.Type != JTokenType.Null)
+            {
+                return segment.sample.ToString();
+            }
+            return Placeholder(segment);
+        }
+
+        static string Placeholder(EffectSegment segment)
+        {
+            return "{" + (segment.name ?? string.Empty) + "}";
+        }
+
+        static void AppendWrapped(StringBuilder builder, string text, Color color)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+            builder.Append("<color=");
+            builder.Append(CardSegmentPalette.ToHex(color));
+            builder.Append('>');
+            builder.Append(text);
+            builder.Append("</color>");
+        }
+    }
+
     [Serializable]
     public class CardData
     {
@@ -97,8 +330,24 @@ namespace DungeonCardDesign.EditorTools
         public string category;
         public string effect;
         public VariablesData variables;
+        /// <summary>
+        /// 词条（顽固 / 湮灭 / 裂变2 …）。
+        ///
+        /// 工具侧只做三件事：存储、显示、格式校验。词条的**语义**由运行时战斗代码实现，
+        /// 所以这里刻意不校验词条名是否在某个白名单里——新加词条不用回头改工具。
+        /// 空列表存盘时不写该字段（见 CardTreeStore.ApplyKeywordTokens）。
+        /// </summary>
+        public List<string> keywords = new List<string>();
         public string acquisition;
         public string design_intent;
+
+        /// <summary>
+        /// Python 导出的着色/取值派生数据。null 表示这张卡没有变量也没有占位符，
+        /// 面板预览会退回纯文本渲染（见 VariableCodec.RenderTemplate）。
+        /// 存盘时丢弃，每次导出重新生成——留着旧的不如没有，改了效果却忘了重导会骗人。
+        /// </summary>
+        public BindingsData bindings;
+
         // 战斗内升级效果，对应【战斗升级】。Unity 侧编辑，画布里暂未纳入字段规范。
         public string combat_upgrade;
         public string[] missing_fields;
@@ -618,6 +867,82 @@ namespace DungeonCardDesign.EditorTools
                     messages.Add("警告：{" + name + "} 只定义了 " + string.Join("/", levels.ToArray())
                         + "，没定义的等级会原样显示占位符");
                 }
+            }
+
+            // 6. 词条：空词条 / 重复 / 裂变X 格式
+            messages.AddRange(ValidateKeywords(card));
+
+            return messages;
+        }
+
+        /// <summary>裂变X 的词条前缀；X 必须是正整数，写别的都算格式错。</summary>
+        const string FissionPrefix = "裂变";
+
+        /// <summary>
+        /// 词条校验。只看格式，不看词条名——词条语义由运行时战斗代码决定，
+        /// 工具侧加新词条不该被拦住。
+        /// </summary>
+        static List<string> ValidateKeywords(CardData card)
+        {
+            var messages = new List<string>();
+            if (card == null || card.keywords == null)
+            {
+                return messages;
+            }
+
+            // 先按「去掉首尾空白」归一化，免得 "顽固" 和 "顽固 " 被当成两个不同词条
+            var counts = new Dictionary<string, int>();
+            var order = new List<string>();
+            foreach (string raw in card.keywords)
+            {
+                string name = raw == null ? string.Empty : raw.Trim();
+                if (name.Length == 0)
+                {
+                    messages.Add("错误：词条列表里有空白词条，请填写词条名或删掉该行");
+                    continue;
+                }
+                if (!counts.ContainsKey(name))
+                {
+                    order.Add(name);
+                    counts[name] = 0;
+                }
+                counts[name] = counts[name] + 1;
+            }
+
+            // 按首次出现顺序报，报错顺序才和面板上看到的顺序一致
+            foreach (string name in order)
+            {
+                if (counts[name] > 1)
+                {
+                    messages.Add("错误：词条 " + name + " 重复了 " + counts[name] + " 次");
+                }
+                messages.AddRange(ValidateFission(name));
+            }
+
+            return messages;
+        }
+
+        /// <summary>裂变X 的 X 必须是正整数；其它词条不做格式检查。</summary>
+        static List<string> ValidateFission(string name)
+        {
+            var messages = new List<string>();
+            if (!name.StartsWith(FissionPrefix, StringComparison.Ordinal))
+            {
+                return messages;
+            }
+
+            // 允许 "裂变 2" 这种中间带空格的写法
+            string tail = name.Substring(FissionPrefix.Length).Trim();
+            if (tail.Length == 0)
+            {
+                messages.Add("错误：词条 " + name + " 缺少数量，裂变X 要写成「裂变2」这样");
+                return messages;
+            }
+
+            int amount;
+            if (!int.TryParse(tail, NumberStyles.Integer, CultureInfo.InvariantCulture, out amount) || amount <= 0)
+            {
+                messages.Add("错误：词条 " + name + " 的 X 必须是正整数，例如「裂变2」");
             }
 
             return messages;

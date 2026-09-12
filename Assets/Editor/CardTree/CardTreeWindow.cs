@@ -47,6 +47,8 @@ namespace DungeonCardDesign.EditorTools
 
         // 变量列表 / 效果预览 / 校验
         VisualElement _variableRowsHost;
+        // 词条列表
+        VisualElement _keywordRowsHost;
         Button[] _levelButtons;
         Label _previewLabel;
         Label _validationLabel;
@@ -359,6 +361,7 @@ namespace DungeonCardDesign.EditorTools
 
             // 变量不再是纯文本，改成带等级的结构化列表
             _cardSection.Add(BuildVariableSection());
+            _cardSection.Add(BuildKeywordSection());
             AddTextRow(_cardSection, "获取", c => c.acquisition, (c, v) => c.acquisition = v, false, null);
             AddTextRow(_cardSection, "设计意图", c => c.design_intent, (c, v) => c.design_intent = v, true, null);
 
@@ -557,6 +560,8 @@ namespace DungeonCardDesign.EditorTools
             section.Add(previewCaption);
 
             _previewLabel = new Label(string.Empty);
+            // 按契约 §6 给变量/运行时量/错误分色，需要富文本
+            _previewLabel.enableRichText = true;
             _previewLabel.style.whiteSpace = WhiteSpace.Normal;
             _previewLabel.style.paddingLeft = 4f;
             _previewLabel.style.paddingRight = 4f;
@@ -579,6 +584,136 @@ namespace DungeonCardDesign.EditorTools
 
             RefreshLevelButtons();
             return section;
+        }
+
+        // ==================================================================
+        // 词条列表
+        // ==================================================================
+
+        VisualElement BuildKeywordSection()
+        {
+            var section = new VisualElement();
+            section.style.marginBottom = 8f;
+
+            var caption = new Label("词条");
+            caption.style.fontSize = 10f;
+            caption.style.color = new StyleColor(new Color(0.56f, 0.61f, 0.72f));
+            section.Add(caption);
+
+            var hint = new Label("只写词条名，效果由运行时战斗代码实现；裂变X 的 X 要写正整数");
+            hint.style.fontSize = 9f;
+            hint.style.whiteSpace = WhiteSpace.Normal;
+            hint.style.color = new StyleColor(new Color(0.45f, 0.49f, 0.58f));
+            section.Add(hint);
+
+            _keywordRowsHost = new VisualElement();
+            _keywordRowsHost.style.marginTop = 3f;
+            section.Add(_keywordRowsHost);
+
+            var addButton = new Button(AddKeywordRow) { text = "+ 添加词条" };
+            addButton.style.marginTop = 4f;
+            section.Add(addButton);
+
+            return section;
+        }
+
+        /// <summary>
+        /// 按当前选中卡的词条重建输入行。切换卡牌、增删词条时调用；
+        /// 打字时不调用，否则输入焦点会掉。
+        /// </summary>
+        void RefreshKeywordRows()
+        {
+            if (_keywordRowsHost == null)
+            {
+                return;
+            }
+
+            _keywordRowsHost.Clear();
+            if (_selectedCard == null)
+            {
+                return;
+            }
+            if (_selectedCard.keywords == null)
+            {
+                _selectedCard.keywords = new List<string>();
+            }
+
+            // 行不会在打字时重建，所以下标可以安全地捕获
+            List<string> keywords = _selectedCard.keywords;
+            for (int index = 0; index < keywords.Count; index++)
+            {
+                int captured = index;
+
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.alignItems = Align.Center;
+                row.style.marginBottom = 2f;
+
+                // 复用变量行的窄输入框样式，两者外观保持一致
+                TextField field = NewVariableField(keywords[index], 168f);
+                field.tooltip = "例如 顽固 / 湮灭 / 裂变2";
+                field.RegisterValueChangedCallback(evt =>
+                {
+                    if (_suppressFieldCallbacks) return;
+                    keywords[captured] = evt.newValue;
+                    OnKeywordEdited();
+                });
+                row.Add(field);
+
+                var remove = new Button(() => RemoveKeywordRow(captured)) { text = "×" };
+                remove.style.flexShrink = 0f;
+                remove.style.minWidth = 22f;
+                remove.style.marginLeft = 2f;
+                row.Add(remove);
+
+                _keywordRowsHost.Add(row);
+            }
+        }
+
+        void AddKeywordRow()
+        {
+            if (_selectedCard == null)
+            {
+                return;
+            }
+            if (_selectedCard.keywords == null)
+            {
+                _selectedCard.keywords = new List<string>();
+            }
+
+            _selectedCard.keywords.Add("新词条");
+            RefreshKeywordRows();
+            OnKeywordEdited();
+        }
+
+        void RemoveKeywordRow(int index)
+        {
+            if (_selectedCard == null || _selectedCard.keywords == null)
+            {
+                return;
+            }
+
+            List<string> keywords = _selectedCard.keywords;
+            if (index < 0 || index >= keywords.Count)
+            {
+                return;
+            }
+
+            keywords.RemoveAt(index);
+            RefreshKeywordRows();
+            OnKeywordEdited();
+        }
+
+        /// <summary>词条改动后：只刷校验和节点，不重建行，否则输入焦点会掉。</summary>
+        void OnKeywordEdited()
+        {
+            RefreshPreview();
+            MarkDirty();
+
+            if (_selectedCard != null && _graphView != null)
+            {
+                _graphView.RefreshCard(_selectedCard.id);
+            }
         }
 
         static Label NewVariableHeader(string text, float width)
@@ -778,7 +913,16 @@ namespace DungeonCardDesign.EditorTools
                 ? _selectedCard.variables.items
                 : new List<VariableItem>();
 
-            string rendered = VariableCodec.RenderTemplate(_selectedCard.effect, items, _previewLevel);
+            // 有 bindings 就按契约 §6 分色渲染；没有（纯文字卡、或 JSON 是本次改动
+            // 之前导出的）就退回原来的纯文本渲染，功能不倒退。
+            IList<EffectSegment> segments = _selectedCard.bindings != null
+                ? _selectedCard.bindings.effect_segments
+                : null;
+
+            string rendered = segments != null && segments.Count > 0
+                ? CardSegmentRenderer.ToRichText(segments, _previewLevel, out _)
+                : VariableCodec.RenderTemplate(_selectedCard.effect, items, _previewLevel);
+
             _previewLabel.text = string.IsNullOrEmpty(rendered)
                 ? "(效果为空)"
                 : "Lv." + _previewLevel + "   " + rendered;
@@ -891,8 +1035,9 @@ namespace DungeonCardDesign.EditorTools
                 RefreshMissingFields();
             }
 
-            // 变量行和预览都跟着当前选中的卡走
+            // 变量行、词条行和预览都跟着当前选中的卡走
             RefreshVariableRows();
+            RefreshKeywordRows();
             RefreshPreview();
         }
 

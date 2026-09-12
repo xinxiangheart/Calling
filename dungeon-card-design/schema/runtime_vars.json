@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "note": "运行时量注册表（设计期契约）。这里列的是「卡牌文本可以引用、但值要到运行时才知道」的量。Python 导出和 Unity 编辑器都用它做校验；未来 Unity 战斗系统按它实现取值。改这份文件等于改契约，改完要同步战斗代码。",
+  "default_source": "player",
+  "sources": [
+    {
+      "name": "player",
+      "label": "玩家",
+      "note": "当前角色属性，取「受饱食度/装备/精灵影响之后」的最终值。",
+      "vars": [
+        { "name": "力量",     "type": "int", "sample": 4,  "desc": "决定武器装备门槛，受饱食度影响" },
+        { "name": "体质",     "type": "int", "sample": 5,  "desc": "决定防具门槛与饥饿上限，受饱食度影响" },
+        { "name": "生命",     "type": "int", "sample": 30, "desc": "当前生命值，归零死亡" },
+        { "name": "生命上限", "type": "int", "sample": 40, "desc": "生命值上限" },
+        { "name": "护甲",     "type": "int", "sample": 0,  "desc": "本场战斗累计护甲" },
+        { "name": "饥饿",     "type": "int", "sample": 6,  "desc": "当前饥饿值，移动与战斗消耗" },
+        { "name": "饥饿上限", "type": "int", "sample": 10, "desc": "由体质决定" },
+        { "name": "饱食等级", "type": "int", "sample": 2,  "desc": "0 极度饥饿 / 1 轻度饥饿 / 2 正常 / 3 吃饱" },
+        { "name": "光照等级", "type": "int", "sample": 2,  "desc": "0~3，决定地图可见范围" },
+        { "name": "手牌数",   "type": "int", "sample": 5,  "desc": "当前手牌张数" },
+        { "name": "槽位总数", "type": "int", "sample": 3,  "desc": "当前武器提供的嵌入槽位数量" },
+        { "name": "已用槽位", "type": "int", "sample": 0,  "desc": "本回合已嵌入的牌数" },
+        { "name": "空余槽位", "type": "int", "sample": 3,  "desc": "槽位总数 - 已用槽位" }
+      ]
+    },
+    {
+      "name": "target",
+      "label": "目标",
+      "note": "当前结算目标。",
+      "vars": [
+        { "name": "生命",     "type": "int", "sample": 20, "desc": "目标当前生命" },
+        { "name": "生命上限", "type": "int", "sample": 24, "desc": "目标生命上限" },
+        { "name": "护甲",     "type": "int", "sample": 5,  "desc": "目标当前护甲，结算时先扣护甲" },
+        { "name": "碎甲层数", "type": "int", "sample": 0,  "desc": "易伤层数，每层提高目标受到的伤害" },
+        { "name": "撕裂层数", "type": "int", "sample": 0,  "desc": "每段攻击附加撕裂层数的伤害" },
+        { "name": "意图伤害", "type": "int", "sample": 8,  "desc": "目标下回合将要造成的伤害" },
+        { "name": "意图护甲", "type": "int", "sample": 0,  "desc": "目标下回合将要获得的护甲" }
+      ]
+    },
+    {
+      "name": "battle",
+      "label": "本场战斗",
+      "note": "只在一场战斗内有效的计数。",
+      "vars": [
+        { "name": "回合数",         "type": "int", "sample": 1, "desc": "当前是第几回合" },
+        { "name": "本回合出牌数",   "type": "int", "sample": 0, "desc": "本回合已嵌入执行的牌数" },
+        { "name": "本回合受伤",     "type": "int", "sample": 0, "desc": "本回合玩家已受到的伤害" },
+        { "name": "本回合造成伤害", "type": "int", "sample": 0, "desc": "本回合玩家已造成的伤害" }
+      ]
+    },
+    {
+      "name": "run",
+      "label": "本局探索",
+      "note": "一次地牢探索内累计的资源。",
+      "vars": [
+        { "name": "层数",       "type": "int", "sample": 1,  "desc": "当前地牢层数 1~4" },
+        { "name": "金币",       "type": "int", "sample": 30, "desc": "局内金币" },
+        { "name": "矿物_赤红",  "type": "int", "sample": 0,  "desc": "赤红矿石（火）持有量" },
+        { "name": "矿物_寒霜",  "type": "int", "sample": 0,  "desc": "寒霜凝液（冰）持有量" },
+        { "name": "矿物_翠绿",  "type": "int", "sample": 0,  "desc": "翠绿孢囊（自然）持有量" },
+        { "name": "矿物_暗影",  "type": "int", "sample": 0,  "desc": "暗影粉尘（暗）持有量" },
+        { "name": "精灵_库恩",  "type": "int", "sample": 0,  "desc": "精灵库恩等级 0~5" },
+        { "name": "精灵_无面",  "type": "int", "sample": 0,  "desc": "精灵无面等级 0~5" },
+        { "name": "精灵_蠕蠕",  "type": "int", "sample": 0,  "desc": "精灵蠕蠕等级 0~5" },
+        { "name": "精灵_希尔",  "type": "int", "sample": 0,  "desc": "精灵希尔等级 0~5" },
+        { "name": "天赋点",     "type": "int", "sample": 0,  "desc": "已获得但未分配的天赋点" }
+      ]
+    },
+    {
+      "name": "meta",
+      "label": "局外",
+      "note": "跨局持久化数据。",
+      "vars": [
+        { "name": "银行金币", "type": "int", "sample": 0, "desc": "银行里已存入的金币" }
+      ]
+    }
+  ]
+}

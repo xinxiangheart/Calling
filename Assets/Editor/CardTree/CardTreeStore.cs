@@ -256,6 +256,8 @@ namespace DungeonCardDesign.EditorTools
             // 如果先写进 modelObject，面板上删掉的变量会因为原始 JSON 里
             // 还留着而被原样保留下来（存一次回来又出现了）。
             ApplyVariableTokens(mergedCards, data);
+            ApplyKeywordTokens(mergedCards, data);
+            DropCardDerivedFields(mergedCards);
             root["cards"] = mergedCards;
 
             root["edges"] = MergeItemArray(root["edges"] as JArray, modelEdges);
@@ -276,6 +278,36 @@ namespace DungeonCardDesign.EditorTools
             foreach (string name in DerivedFieldNames)
             {
                 root.Remove(name);
+            }
+        }
+
+        /// <summary>
+        /// 每张卡自己的派生字段。bindings 是 Python 从 variables + effect 推出来的
+        /// 着色/取值表（契约 §5），在 Unity 里改了效果它就过期了——留着的话下次加载
+        /// 会拿旧颜色骗人，所以存盘丢掉，等下次导出重新生成。
+        /// </summary>
+        static readonly string[] CardDerivedFieldNames = { "bindings" };
+
+        /// <summary>丢弃每张卡上的派生字段。必须在卡片数组合并之后调用。</summary>
+        static void DropCardDerivedFields(JArray cardsArray)
+        {
+            if (cardsArray == null)
+            {
+                return;
+            }
+
+            foreach (JToken token in cardsArray)
+            {
+                var card = token as JObject;
+                if (card == null)
+                {
+                    continue;
+                }
+
+                foreach (string name in CardDerivedFieldNames)
+                {
+                    card.Remove(name);
+                }
             }
         }
 
@@ -355,6 +387,62 @@ namespace DungeonCardDesign.EditorTools
                     card.variables.raw = VariableCodec.BuildRaw(items);
                 }
                 variables["raw"] = card.variables != null ? card.variables.raw : string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 把每张卡的词条列表写回 keywords 数组。
+        ///
+        /// 只在有词条时才写；空列表直接把整个键删掉，免得每张没词条的卡都挂一个
+        /// "keywords": [] 的无意义噪音。
+        ///
+        /// 和 ApplyVariableTokens 同理，必须在 MergeItemArray 之后调用：
+        /// 数组本身是整体替换，但"删掉多余的键" Merge 做不到，只能自己来。
+        /// </summary>
+        static void ApplyKeywordTokens(JArray cardsArray, CanvasExport data)
+        {
+            if (cardsArray == null || data.cards == null)
+            {
+                return;
+            }
+
+            var cardById = new Dictionary<string, CardData>();
+            foreach (CardData card in data.cards)
+            {
+                if (card != null && !string.IsNullOrEmpty(card.id))
+                {
+                    cardById[card.id] = card;
+                }
+            }
+
+            foreach (JToken token in cardsArray)
+            {
+                var cardObject = token as JObject;
+                if (cardObject == null || cardObject["id"] == null)
+                {
+                    continue;
+                }
+
+                CardData card;
+                if (!cardById.TryGetValue(cardObject["id"].ToString(), out card))
+                {
+                    continue;
+                }
+
+                if (card.keywords == null || card.keywords.Count == 0)
+                {
+                    cardObject.Remove("keywords");
+                    continue;
+                }
+
+                var array = new JArray();
+                foreach (string keyword in card.keywords)
+                {
+                    // 列表里混进 null（手改 JSON 才可能）时写成空串，
+                    // 交给校验去报"空白词条"，而不是往 JSON 里塞一个 null
+                    array.Add(keyword != null ? keyword : string.Empty);
+                }
+                cardObject["keywords"] = array;
             }
         }
 

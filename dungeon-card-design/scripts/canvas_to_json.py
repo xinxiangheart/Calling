@@ -59,6 +59,8 @@ LOGGER = logging.getLogger("canvas_to_json")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CANVAS_DIR = PROJECT_ROOT / "canvases"
 DEFAULT_EXPORT_DIR = PROJECT_ROOT / "exports"
+# 运行时量注册表（契约见 schema/变量与公式规范.md）
+DEFAULT_RUNTIME_VARS = PROJECT_ROOT / "schema" / "runtime_vars.json"
 
 # --------------------------------------------------------------------------
 # 字段规范
@@ -69,11 +71,20 @@ FIELD_SPEC: Tuple[Tuple[str, str], ...] = (
     ("category", "类别"),
     ("effect", "效果"),
     ("variables", "变量"),
+    ("keywords", "词条"),
     ("acquisition", "获取"),
     ("design_intent", "设计意图"),
 )
 FIELD_KEY_BY_LABEL: Dict[str, str] = {label: key for key, label in FIELD_SPEC}
 FIELD_LABEL_BY_KEY: Dict[str, str] = {key: label for key, label in FIELD_SPEC}
+
+# 允许多行出现的字段：多行按出现顺序累积，最后用 ``;`` 连接再统一解析，
+# 所以不会被后面的行覆盖掉。单行写法本身就用 ``;`` 分隔，走的是同一条路径。
+MULTI_LINE_FIELD_KEYS = frozenset(("variables", "keywords"))
+
+# 可以不填的字段：不算进 ``missing_fields``。
+# 【变量】和【词条】只有部分卡牌才有，缺了不该被标成「字段没填完」。
+OPTIONAL_FIELD_KEYS = frozenset(("variables", "keywords"))
 
 # 已取消的字段标记。识别它们只是为了「不报警、不输出」：
 # 【负面】合并进【效果】，【进化】改由画布连线表达。
@@ -119,8 +130,9 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
     （例如「由【烈焰斩】进化」）不会被误判成字段，会原样留在当前字段值里。
     出现在行首的未知【标记】仍按字段处理并给出告警，便于发现字段名写错。
 
-    【变量】是唯一允许多行出现的字段：多行按出现顺序累积后用 ``;`` 连接，
-    再交给 :func:`parse_variables` 统一解析，不会被后面的行覆盖掉。
+    ``MULTI_LINE_FIELD_KEYS`` 里的字段（当前是【变量】和【词条】）允许多行出现：
+    多行按出现顺序累积后用 ``;`` 连接，再交给 :func:`parse_variables` /
+    :func:`parse_keywords` 统一解析，不会被后面的行覆盖掉。
     单行写法（本身就用 ``;`` 分隔）走的是同一条路径，两种写法结果一致。
 
     ``IGNORED_FIELD_LABELS`` 里的【标记】（当前是【负面】和【进化】）在行首出现时
@@ -144,8 +156,7 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
         return fields, extra, warnings
 
     seen: Dict[str, int] = {}
-    variable_parts: List[str] = []
-    variable_seen = False
+    multi_parts: Dict[str, List[str]] = {}
     for index, (marker_start, value_start, label, key) in enumerate(entries):
         end = entries[index + 1][0] if index + 1 < len(entries) else len(text)
         value = text[value_start:end].strip()
@@ -159,12 +170,10 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
                 % (_line_number(text, marker_start), label)
             )
             continue
-        if key == "variables":
-            # 多行【变量】：这里只累积，等全部字段扫完再统一拼；
+        if key in MULTI_LINE_FIELD_KEYS:
+            # 多行字段（【变量】【词条】）：这里只累积，等全部字段扫完再统一拼；
             # 因此不会触发下面的「重复覆盖」告警。
-            variable_seen = True
-            if value:
-                variable_parts.append(value)
+            multi_parts.setdefault(key, []).append(value)
             continue
         seen[key] = seen.get(key, 0) + 1
         if seen[key] > 1:
@@ -173,9 +182,9 @@ def parse_fields(text: str) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
             )
         fields[key] = value
 
-    if variable_seen:
-        # 用 ; 连接后交给 parse_variables，输出顺序与源文件中的出现顺序一致
-        fields["variables"] = "; ".join(variable_parts)
+    for key, parts in multi_parts.items():
+        # 用 ; 连接后统一解析，输出顺序与源文件中的出现顺序一致
+        fields[key] = "; ".join(part for part in parts if part)
 
     return fields, extra, warnings
 
@@ -196,6 +205,677 @@ def parse_variables(raw: Optional[str]) -> Dict[str, Any]:
         else:
             unparsed.append(chunk)
     return {"raw": raw, "items": items, "unparsed": unparsed}
+
+
+def parse_keywords(raw: Optional[str]) -> List[str]:
+    """把 "顽固; 湮灭" 解析成 ["顽固", "湮灭"]。
+
+    按 ``;``（含全角）和换行切开，逐项去空白；重复的只保留第一次出现的那个，
+    所以结果既是去重的，又保持了源文件里的顺序。
+    "裂变2" 这种带数字的词条原样保留整个字符串。
+
+    这里不校验词条名是否在合法列表里——词条语义由运行时战斗代码决定，
+    工具侧只负责存字符串，新加词条不该被工具拦住。
+    """
+    if is_placeholder(raw):
+        return []
+    result: List[str] = []
+    seen = set()
+    for chunk in VARIABLE_ITEM_SPLIT.split(raw):
+        name = chunk.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
+
+
+# --------------------------------------------------------------------------
+# 算式与运行时量
+#
+# 契约见 schema/变量与公式规范.md。核心约定三条：
+#   1. 乘号只认 *。× 属于显示层，写进数据一律报错并提示改成 *
+#   2. 花括号里只允许写一个变量名，不允许写算式
+#   3. 算式只写在【变量】的值里
+# --------------------------------------------------------------------------
+
+# 写错位置的运算符 → 正确写法。给策划的报错里直接带出建议。
+MISPLACED_OPERATOR_HINTS = {"×": "*", "✕": "*", "✖": "*", "÷": "/", "／": "/"}
+
+# 值里出现这些字符，就说明它是算式而不是字面量。
+# × ÷ 这些「长得像运算符」的字符也要算进来：它们不是合法运算符，
+# 但必须让值被判定成算式，才能报出「请改用 *」而不是被当字面量静默放过。
+FORMULA_MARK_RE = re.compile(r"[$+\-*/()×÷✕✖／]|[^\W\d]", re.UNICODE)
+
+# 写得像乘号但不是乘号的单个字母。未定义时给一条专门的提示。
+LATIN_MULTIPLY_LOOKALIKES = frozenset(("x", "X", "ｘ", "Ｘ"))
+
+# 被引号包起来的值强制当字面量，引号本身会被剥掉
+QUOTED_VALUE_RE = re.compile(r"^(?P<quote>[\"'])(?P<body>.*)(?P=quote)$", re.DOTALL)
+
+# 效果文本里的占位符：半角 {} 和全角 ｛｝ 都认
+PLACEHOLDER_RE = re.compile(r"[{｛]([^{}｛｝]+)[}｝]")
+
+# 花括号里允许的内容：一个裸变量名
+BARE_NAME_RE = re.compile(r"^[^\W\d]\w*$", re.UNICODE)
+
+# 变量名的等级后缀：伤害_Lv1 → 基础名「伤害」
+LEVEL_SUFFIX_RE = re.compile(r"^(?P<base>.+)_Lv(?P<level>\d+)$")
+
+# 算式记号。顺序有讲究：reference 必须在 name 前面，否则 $ 会被当成普通字符。
+EXPR_TOKEN_RE = re.compile(
+    r"""
+    \s*
+    (?:
+        (?P<number>\d+(?:\.\d+)?)
+      | (?P<reference>\$[^\W\d]\w*(?:\.[^\W\d]\w*)?)
+      | (?P<name>[^\W\d]\w*)
+      | (?P<op>[+\-*/()])
+      | (?P<bad>.)
+    )
+    """,
+    re.VERBOSE | re.UNICODE,
+)
+
+
+class ExprError(Exception):
+    """算式写错了。消息是给策划看的，尽量带着怎么改。"""
+
+
+class RuntimeRegistry:
+    """``schema/runtime_vars.json`` 的只读视图。
+
+    文件缺失或损坏时**降级成空表**而不是让导出失败：这样导出照常跑完，
+    所有 ``$`` 引用会集中报「注册表里没有这个量」，比整个脚本报错更容易定位。
+    """
+
+    def __init__(self) -> None:
+        # 来源名 -> {量名: 量定义}
+        self.sources: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # 量名 -> 定义了它的来源列表（用于「省略来源」时的唯一性判断）
+        self.by_name: Dict[str, List[str]] = {}
+        self.default_source: Optional[str] = None
+        self.loaded_from: Optional[str] = None
+
+    @classmethod
+    def load(cls, path: Any) -> Tuple["RuntimeRegistry", List[str]]:
+        registry = cls()
+        warnings: List[str] = []
+        candidate = Path(path)
+
+        if not candidate.is_file():
+            warnings.append(
+                "运行时量注册表不存在（%s），所有 $ 引用都会报未定义" % candidate
+            )
+            return registry, warnings
+
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            warnings.append("运行时量注册表解析失败（%s）：%s" % (candidate, exc))
+            return registry, warnings
+
+        registry.loaded_from = str(candidate)
+        registry.default_source = data.get("default_source")
+        for source in data.get("sources") or []:
+            source_name = source.get("name")
+            if not source_name:
+                continue
+            entry: Dict[str, Dict[str, Any]] = {}
+            for item in source.get("vars") or []:
+                item_name = item.get("name")
+                if not item_name:
+                    continue
+                entry[item_name] = item
+                registry.by_name.setdefault(item_name, []).append(source_name)
+            registry.sources[source_name] = entry
+        return registry, warnings
+
+    def has(self, source: str, name: str) -> bool:
+        return name in self.sources.get(source, {})
+
+    def find_sources(self, name: str) -> List[str]:
+        """哪些来源里定义了这个量。用来判断「省略来源」会不会有歧义。"""
+        return list(self.by_name.get(name, []))
+
+    def meta(self, source: str, name: str) -> Dict[str, Any]:
+        return self.sources.get(source, {}).get(name, {})
+
+    def type_of(self, source: str, name: str) -> Optional[str]:
+        return self.meta(source, name).get("type")
+
+
+def analyze_expression(text: str) -> Tuple[List[str], List[Tuple[Optional[str], str]]]:
+    """校验一个算式并收集它引用的名字，返回 (本卡变量名, 运行时量引用)。
+
+    这里只做**语法校验和依赖收集**，不求值——值要到运行时才有。
+    写错了抛 :class:`ExprError`，消息直接给策划看。
+    """
+    parser = _ExpressionParser(text)
+    parser.parse()
+    return parser.names, parser.runtime_refs
+
+
+def split_reference(token: str) -> Tuple[Optional[str], str]:
+    """把 ``$player.力量`` 拆成 ``("player", "力量")``；``$力量`` 拆成 ``(None, "力量")``。"""
+    body = token[1:]
+    if "." in body:
+        source, name = body.split(".", 1)
+        return source, name
+    return None, body
+
+
+class _ExpressionParser:
+    """递归下降解析器：只校验语法 + 收集引用，不求值。
+
+    文法见契约文档 §2.5::
+
+        expression := term (('+' | '-') term)*
+        term       := factor (('*' | '/') factor)*
+        factor     := '-' factor | primary
+        primary    := number | '$' reference | name | '(' expression ')'
+        reference  := [source '.'] name
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text = text or ""
+        self.tokens = tokenize_expression(self.text)
+        self.pos = 0
+        # 引用到的本卡变量名（不带 $）
+        self.names: List[str] = []
+        # 引用到的运行时量：(来源 或 None, 名字)
+        self.runtime_refs: List[Tuple[Optional[str], str]] = []
+
+    # ---- 记号流 --------------------------------------------------------
+    def _peek(self) -> Optional[Tuple[str, str]]:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def _accept_op(self, *operators: str) -> bool:
+        token = self._peek()
+        if token is not None and token[0] == "op" and token[1] in operators:
+            self.pos += 1
+            return True
+        return False
+
+    # ---- 文法 ----------------------------------------------------------
+    def parse(self) -> None:
+        if not self.tokens:
+            raise ExprError("算式是空的")
+        self._expression()
+        leftover = self._peek()
+        if leftover is not None:
+            raise ExprError("算式末尾有多余内容「%s」" % leftover[1])
+
+    def _expression(self) -> None:
+        self._term()
+        while self._accept_op("+", "-"):
+            self._term()
+
+    def _term(self) -> None:
+        self._factor()
+        while self._accept_op("*", "/"):
+            self._factor()
+
+    def _factor(self) -> None:
+        if self._accept_op("-"):
+            self._factor()
+            return
+        self._primary()
+
+    def _primary(self) -> None:
+        token = self._peek()
+        if token is None:
+            raise ExprError("算式在结尾处断了，少了一个数值或变量名")
+
+        kind, value = token
+        if kind == "number":
+            self.pos += 1
+            return
+        if kind == "op" and value == "(":
+            self.pos += 1
+            self._expression()
+            if not self._accept_op(")"):
+                raise ExprError("括号没有闭合")
+            return
+        if kind == "op":
+            raise ExprError("这里不该出现运算符「%s」" % value)
+        if kind == "name":
+            self.pos += 1
+            self.names.append(value)
+            return
+        if kind == "reference":
+            self.pos += 1
+            self.runtime_refs.append(split_reference(value))
+            return
+        raise ExprError("无法识别的记号「%s」" % value)
+
+
+def tokenize_expression(text: str) -> List[Tuple[str, str]]:
+    """把算式切成记号，返回 ``[(kind, value)]``，kind ∈ number/reference/name/op。
+
+    遇到非法字符抛 :class:`ExprError`；``×`` ``÷`` 会给出「请改用 * /」的提示。
+    """
+    tokens: List[Tuple[str, str]] = []
+    pos = 0
+    length = len(text or "")
+    while pos < length:
+        match = EXPR_TOKEN_RE.match(text, pos)
+        if match is None or match.end() == pos:
+            break
+        pos = match.end()
+
+        bad = match.group("bad")
+        if bad is not None:
+            hint = MISPLACED_OPERATOR_HINTS.get(bad)
+            if hint:
+                raise ExprError("「%s」不是合法运算符，乘号请写 *，除号请写 /" % bad)
+            raise ExprError("算式里有无法识别的字符「%s」" % bad)
+
+        for kind in ("number", "reference", "name", "op"):
+            value = match.group(kind)
+            if value is not None:
+                tokens.append((kind, value))
+                break
+    return tokens
+
+
+MAX_LEVEL = 3
+
+
+def classify_value(raw: Optional[str]) -> Tuple[str, str]:
+    """判定变量值的形态，返回 ``(kind, value)``，kind ∈ ``literal`` / ``formula``。
+
+    规则见契约文档 §2.1，按顺序判定：
+    占位写法 → 字面量；引号包起来 → 强制字面量；含 ``$``/运算符/裸标识符 → 算式。
+    """
+    text = (raw or "").strip()
+    if text.lower() in PLACEHOLDER_VALUES:
+        return "literal", text
+
+    quoted = QUOTED_VALUE_RE.match(text)
+    if quoted:
+        return "literal", quoted.group("body")
+
+    # 值里夹着空白（如 "2 3"）不是正经字面量，判成算式交给校验报错；
+    # 否则它没有任何算式记号，会被当字面量静默放过。
+    if re.search(r"\S\s+\S", text):
+        return "formula", text
+
+    if FORMULA_MARK_RE.search(text):
+        return "formula", text
+    return "literal", text
+
+
+def _record(collection: List[Any], value: Any) -> None:
+    """按出现顺序去重地追加。"""
+    if value not in collection:
+        collection.append(value)
+
+
+def _pick_level(entry: Dict[str, Any], level: int) -> Optional[Dict[str, Any]]:
+    """按等级取值：先找该等级的定义，再回退到不带后缀的定义。"""
+    return entry["levels"].get(str(level)) or entry["levels"].get("base")
+
+
+def _levels_map(entry: Dict[str, Any]) -> Dict[str, str]:
+    """每个等级最终取到的字面量/算式文本，取不到的等级不出现在结果里。"""
+    result: Dict[str, str] = {}
+    for level in range(1, MAX_LEVEL + 1):
+        picked = _pick_level(entry, level)
+        if picked is not None:
+            result[str(level)] = picked["value"]
+    return result
+
+
+def _group_variables(items: Dict[str, str], messages: List[str]) -> Dict[str, Dict[str, Any]]:
+    """把 ``{"伤害_Lv1": "2", "伤害": "5"}`` 按基础名归并成一张表。
+
+    归并是必要的：``伤害`` 和 ``伤害_Lv1`` 是同一个逻辑变量的不同等级，
+    校验依赖关系时必须当成一个节点，否则循环引用检测会漏。
+    """
+    entries: Dict[str, Dict[str, Any]] = {}
+    for key, raw_value in items.items():
+        match = LEVEL_SUFFIX_RE.match(key)
+        base = match.group("base") if match else key
+        level = match.group("level") if match else None
+
+        if match is not None:
+            level_number = int(match.group("level"))
+            if level_number < 1 or level_number > MAX_LEVEL:
+                messages.append(
+                    "警告：变量 %s 的等级超出了 Lv.1~Lv.%d 的范围，该等级不会被使用"
+                    % (key, MAX_LEVEL)
+                )
+            level = str(level_number)
+
+        entry = entries.get(base)
+        if entry is None:
+            entry = {"key": base, "levels": {}, "kinds": [], "refs": [], "runtime_refs": []}
+            entries[base] = entry
+
+        kind, value = classify_value(raw_value)
+        entry["levels"][level or "base"] = {"kind": kind, "value": value, "source_key": key}
+
+    return entries
+
+
+def _check_bare_name(
+    name: str,
+    card_bases: Dict[str, Dict[str, Any]],
+    registry: RuntimeRegistry,
+    entry: Dict[str, Any],
+    source_key: str,
+    messages: List[str],
+) -> None:
+    """校验算式里的裸名字：本卡变量优先，其次运行时量注册表。"""
+    if name in card_bases:
+        _record(entry["refs"], name)
+        return
+
+    sources = registry.find_sources(name)
+    if len(sources) == 1:
+        # 省略 $ 来源的写法，等价于 $<唯一来源>.<name>
+        _record(entry["runtime_refs"], (sources[0], name))
+        return
+    if len(sources) > 1:
+        messages.append(
+            "错误：%s 里的「%s」在多个来源里都有（%s），请写成 $来源.%s"
+            % (source_key, name, "、".join(sources), name)
+        )
+        return
+    if name in LATIN_MULTIPLY_LOOKALIKES:
+        messages.append(
+            "错误：%s 里的「%s」不是乘号，写乘法请用 *" % (source_key, name)
+        )
+        return
+    messages.append(
+        "错误：%s 里的「%s」既不是本卡变量，也不在运行时量注册表里（想写文字请加引号）"
+        % (source_key, name)
+    )
+
+
+def _check_reference(
+    source: Optional[str],
+    name: str,
+    registry: RuntimeRegistry,
+    entry: Dict[str, Any],
+    source_key: str,
+    messages: List[str],
+) -> None:
+    """校验 $来源.名字 形式的引用。"""
+    if source is None:
+        sources = registry.find_sources(name)
+        if len(sources) == 1:
+            _record(entry["runtime_refs"], (sources[0], name))
+            return
+        if len(sources) > 1:
+            messages.append(
+                "错误：%s 里的 $%s 有歧义（%s 里都有这个名字），请写成 $来源.%s"
+                % (source_key, name, "、".join(sources), name)
+            )
+            return
+        messages.append("错误：%s 里的 $%s 不在运行时量注册表里" % (source_key, name))
+        return
+
+    if registry.has(source, name):
+        _record(entry["runtime_refs"], (source, name))
+        return
+    if source in registry.sources:
+        messages.append(
+            "错误：%s 里的 $%s.%s —— 来源 %s 里没有「%s」这个量"
+            % (source_key, source, name, source, name)
+        )
+        return
+    messages.append(
+        "错误：%s 里的 $%s.%s —— 注册表里没有来源 %s" % (source_key, source, name, source)
+    )
+
+
+def _find_lookalike_multiply(
+    text: str,
+    entries: Dict[str, Dict[str, Any]],
+    registry: RuntimeRegistry,
+) -> List[str]:
+    """挑出算式里被当成乘号写的 x/X。
+
+    只有在它既不是本卡变量、也不在运行时量注册表里时才算写错；
+    真有个变量叫 x 的话不该误报。文法已经报错的前提下才会调用它，
+    所以这里只做「谁看起来像乘号」的判断。
+    """
+    try:
+        tokens = tokenize_expression(text)
+    except ExprError:
+        return []
+
+    found: List[str] = []
+    for kind, value in tokens:
+        if kind != "name" or value not in LATIN_MULTIPLY_LOOKALIKES:
+            continue
+        if value in entries or registry.find_sources(value):
+            continue
+        _record(found, value)
+    return found
+
+
+def _analyze_variable_entries(
+    entries: Dict[str, Dict[str, Any]],
+    registry: RuntimeRegistry,
+    messages: List[str],
+) -> None:
+    """逐条校验变量的算式，并把引用的名字收集到 entry 上。"""
+    for entry in entries.values():
+        for level_key, item in entry["levels"].items():
+            _record(entry["kinds"], item["kind"])
+            if item["kind"] != "formula":
+                continue
+            try:
+                names, runtime_refs = analyze_expression(item["value"])
+            except ExprError as exc:
+                # 「2 X 3」这类假乘号会在文法层先撞成语法错，
+                # 单独挑出来报「不是乘号」，别让策划猜那个 X 到底错在哪。
+                lookalikes = _find_lookalike_multiply(
+                    item["value"], entries, registry
+                )
+                if lookalikes:
+                    messages.append(
+                        "错误：变量 %s 里的「%s」不是乘号，写乘法请用 *"
+                        % (item["source_key"], lookalikes[0])
+                    )
+                else:
+                    messages.append(
+                        "错误：变量 %s 的算式写错了（%s）" % (item["source_key"], exc)
+                    )
+                continue
+            for name in names:
+                _check_bare_name(name, entries, registry, entry, item["source_key"], messages)
+            for source, name in runtime_refs:
+                _check_reference(source, name, registry, entry, item["source_key"], messages)
+
+
+def _find_cycles(entries: Dict[str, Dict[str, Any]]) -> List[str]:
+    """在「本卡变量互相引用」的图上找环：A 用 B、B 又用 A 是算不出来的。"""
+    messages: List[str] = []
+    state: Dict[str, int] = {}
+    stack: List[str] = []
+
+    def visit(node: str) -> None:
+        state[node] = 1
+        stack.append(node)
+        for dependency in entries.get(node, {}).get("refs", []):
+            if dependency not in entries:
+                continue
+            status = state.get(dependency, 0)
+            if status == 1:
+                loop = stack[stack.index(dependency):] + [dependency]
+                messages.append("错误：变量循环引用：%s" % " → ".join(loop))
+            elif status == 0:
+                visit(dependency)
+        stack.pop()
+        state[node] = 2
+
+    for name in entries:
+        if state.get(name, 0) == 0:
+            visit(name)
+    return messages
+
+
+def _resolve_placeholder(
+    name: str,
+    entries: Dict[str, Dict[str, Any]],
+    registry: RuntimeRegistry,
+    messages: List[str],
+) -> Dict[str, Any]:
+    """把一个 {名字} 解析成分段记录。"""
+    if name in entries:
+        return {"kind": "card", "name": name, "levels": _levels_map(entries[name])}
+
+    sources = registry.find_sources(name)
+    if len(sources) == 1:
+        source = sources[0]
+        meta = registry.meta(source, name)
+        return {
+            "kind": "runtime",
+            "source": source,
+            "name": name,
+            "type": meta.get("type"),
+            "sample": meta.get("sample"),
+        }
+    if len(sources) > 1:
+        messages.append(
+            "错误：【效果】里的 {%s} 有歧义（%s 里都有这个名字），请写全 $来源.%s"
+            % (name, "、".join(sources), name)
+        )
+        return {"kind": "error", "content": "{%s}" % name, "name": name}
+
+    messages.append(
+        "错误：【效果】引用了 {%s}，但它既不是本卡变量，也不在运行时量注册表里" % name
+    )
+    return {"kind": "error", "content": "{%s}" % name, "name": name}
+
+
+def _build_effect_segments(
+    effect: Optional[str],
+    entries: Dict[str, Dict[str, Any]],
+    registry: RuntimeRegistry,
+    messages: List[str],
+) -> List[Dict[str, Any]]:
+    """把效果文本切成「原样文字 / 卡内变量 / 运行时量 / 解析失败」四种分段。
+
+    ``kind`` 取值 text / card / runtime / error。
+    解析失败的占位符不降级成 text——降级会让它看起来像普通文字，
+    Unity 侧就没有任何信号把那个 ``{xxx}`` 标红。
+    """
+    text = effect or ""
+    segments: List[Dict[str, Any]] = []
+    cursor = 0
+
+    for match in PLACEHOLDER_RE.finditer(text):
+        if match.start() > cursor:
+            segments.append({"kind": "text", "content": text[cursor:match.start()]})
+        cursor = match.end()
+
+        raw_name = match.group(1).strip()
+        if not BARE_NAME_RE.match(raw_name):
+            messages.append(
+                "错误：【效果】里的 {%s} 不是变量名——花括号里不能写算式，"
+                "算式要写进【变量】的值里，这里只引用变量名" % raw_name
+            )
+            segments.append(
+                {"kind": "error", "content": match.group(0), "name": raw_name}
+            )
+            continue
+
+        segments.append(_resolve_placeholder(raw_name, entries, registry, messages))
+
+    if cursor < len(text):
+        segments.append({"kind": "text", "content": text[cursor:]})
+    if not segments and text:
+        segments.append({"kind": "text", "content": text})
+    return segments
+
+
+def _collect_runtime_deps(
+    entries: Dict[str, Dict[str, Any]],
+    segments: List[Dict[str, Any]],
+    registry: RuntimeRegistry,
+) -> List[Dict[str, Any]]:
+    """汇总这张卡用到的所有运行时量，供 Unity 运行时提前准备取值。"""
+    deps: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add(source: str, name: str) -> None:
+        if (source, name) in seen:
+            return
+        seen.add((source, name))
+        deps.append({"source": source, "name": name, "type": registry.type_of(source, name)})
+
+    for entry in entries.values():
+        for source, name in entry.get("runtime_refs", []):
+            add(source, name)
+    for segment in segments:
+        if segment.get("kind") == "runtime":
+            add(segment["source"], segment["name"])
+    return deps
+
+
+def _export_variables(entries: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把归并后的变量表导出成 bindings.variables。"""
+    result: List[Dict[str, Any]] = []
+    for base, entry in entries.items():
+        kinds = entry["kinds"]
+        if not kinds:
+            kind = "literal"
+        elif len(kinds) == 1:
+            kind = kinds[0]
+        else:
+            kind = "mixed"
+
+        item: Dict[str, Any] = {"key": base, "kind": kind, "levels": _levels_map(entry)}
+        if entry["refs"]:
+            item["refs"] = list(entry["refs"])
+        if entry["runtime_refs"]:
+            item["runtime_refs"] = ["%s.%s" % (s, n) for s, n in entry["runtime_refs"]]
+        result.append(item)
+    return result
+
+
+def build_bindings(
+    fields: Dict[str, Any],
+    registry: RuntimeRegistry,
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """生成一张卡的 ``bindings``，顺带跑完变量与效果的校验。
+
+    ``bindings`` 是**派生字段**：值全部能从 variables + effect 推出来。
+    之所以还是写进导出，是为了让 Unity 运行时不必再实现一遍
+    「等级回退」「运行时量查表」这些规则——照抄即可。
+    提示统一以「错误：」「警告：」开头，和 Unity 侧 VariableCodec 保持一致。
+    """
+    if registry is None:
+        registry = RuntimeRegistry()
+
+    messages: List[str] = []
+    parsed = parse_variables(fields.get("variables"))
+    entries = _group_variables(parsed["items"], messages)
+
+    _analyze_variable_entries(entries, registry, messages)
+    messages.extend(_find_cycles(entries))
+    segments = _build_effect_segments(fields.get("effect"), entries, registry, messages)
+    runtime_deps = _collect_runtime_deps(entries, segments, registry)
+
+    # 只有「整句都是原样文字」才算空壳。error 段不是 text，
+    # 所以写错的卡一定会带上 bindings，Unity 才有机会把那段标红。
+    only_text = all(segment["kind"] == "text" for segment in segments)
+    if not entries and not runtime_deps and only_text:
+        # 既没变量、又没引用任何运行时量、效果里也没有占位符 → 不写空壳
+        return None, messages
+
+    bindings = {
+        "levels": [str(level) for level in range(1, MAX_LEVEL + 1)],
+        "variables": _export_variables(entries),
+        "effect_segments": segments,
+        "runtime_deps": runtime_deps,
+    }
+    return bindings, messages
 
 
 def parse_name_from_unknown_text(text: str) -> Optional[str]:
@@ -270,6 +950,7 @@ def build_card(
     node: Dict[str, Any],
     index: int,
     parent_of: Dict[str, Optional[str]],
+    registry: RuntimeRegistry,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """把一个 canvas 节点转成卡片对象。"""
     warnings: List[str] = []
@@ -291,7 +972,11 @@ def build_card(
     else:
         parse_warnings = []
 
-    missing = [FIELD_LABEL_BY_KEY[key] for key, _ in FIELD_SPEC if not fields.get(key) and key != "variables"]
+    missing = [
+        FIELD_LABEL_BY_KEY[key]
+        for key, _ in FIELD_SPEC
+        if not fields.get(key) and key not in OPTIONAL_FIELD_KEYS
+    ]
     if node_type == "text" and "name" in fields:
         pass
     elif node_type == "text":
@@ -299,6 +984,12 @@ def build_card(
         if fallback:
             fields["name"] = fallback
             warnings.append("节点 %s 未填写【卡名】，暂用正文首行代替" % node_id)
+
+    # 变量与效果的校验、以及 Unity 运行时要用的 bindings 都在这里算出来
+    bindings: Optional[Dict[str, Any]] = None
+    if node_type == "text":
+        bindings, binding_messages = build_bindings(fields, registry)
+        warnings.extend("%s: %s" % (node_id, message) for message in binding_messages)
 
     card: Dict[str, Any] = {
         "id": node_id,
@@ -308,6 +999,8 @@ def build_card(
         "category": fields.get("category"),
         "effect": fields.get("effect"),
         "variables": parse_variables(fields.get("variables")),
+        "keywords": parse_keywords(fields.get("keywords")),
+        "bindings": bindings,
         "acquisition": fields.get("acquisition"),
         "design_intent": fields.get("design_intent"),
         "extra_fields": extra,
@@ -321,6 +1014,13 @@ def build_card(
         "incoming": [],
         "children": [],
     }
+
+    # 没有词条的卡不写 keywords，免得每张卡都挂一个空数组
+    if not card["keywords"]:
+        del card["keywords"]
+    # 既没变量又没引用运行时量的卡不写 bindings，同样是避免空壳噪音
+    if not card["bindings"]:
+        del card["bindings"]
 
     if node_type == "file":
         card["file"] = node.get("file")
@@ -440,7 +1140,12 @@ def read_canvas(path: Path) -> Dict[str, Any]:
     return data
 
 
-def convert(canvas_path: Path, canvas_dir: Optional[Path], data: Dict[str, Any]) -> Dict[str, Any]:
+def convert(
+    canvas_path: Path,
+    canvas_dir: Optional[Path],
+    data: Dict[str, Any],
+    registry: RuntimeRegistry,
+) -> Dict[str, Any]:
     """把 canvas 数据转成导出用的结构化 payload。"""
     warnings: List[str] = []
     nodes = data["nodes"]
@@ -455,7 +1160,7 @@ def convert(canvas_path: Path, canvas_dir: Optional[Path], data: Dict[str, Any])
         if not isinstance(node, dict):
             warnings.append("第 %d 个节点不是对象，已跳过" % index)
             continue
-        card, card_warnings = build_card(node, index, parent_of)
+        card, card_warnings = build_card(node, index, parent_of, registry)
         warnings.extend(card_warnings)
         if card["id"] in seen_ids:
             seen_ids[card["id"]] += 1
@@ -612,6 +1317,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-o", "--out-dir", default=None, help="导出目录，默认 exports/")
     parser.add_argument("-c", "--canvas-dir", default=None, help="画布目录，默认 canvases/")
+    parser.add_argument(
+        "--runtime-vars",
+        default=None,
+        help="运行时量注册表，默认 schema/runtime_vars.json",
+    )
     parser.add_argument("--pretty", action="store_true", help="输出带缩进的可读 JSON")
     parser.add_argument("--stdout", action="store_true", help="把 JSON 打到标准输出，不写文件")
     parser.add_argument("--log-file", default=None, help="额外写入一份日志文件")
@@ -626,6 +1336,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     canvas_dir = Path(args.canvas_dir) if args.canvas_dir else DEFAULT_CANVAS_DIR
     out_dir = Path(args.out_dir) if args.out_dir else DEFAULT_EXPORT_DIR
     log_file = Path(args.log_file) if args.log_file else None
+    runtime_vars_path = Path(args.runtime_vars) if args.runtime_vars else DEFAULT_RUNTIME_VARS
 
     try:
         setup_logging(args.verbose, log_file)
@@ -636,6 +1347,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     LOGGER.debug("项目根目录: %s", PROJECT_ROOT)
     LOGGER.debug("画布目录: %s", canvas_dir)
     LOGGER.debug("导出目录: %s", out_dir)
+    LOGGER.debug("运行时量注册表: %s", runtime_vars_path)
+
+    # 注册表读不到时只降级告警，不让整个导出失败——否则一张卡写错了
+    # 会导致所有画布都导不出来，排查成本反而更高。
+    registry, registry_warnings = RuntimeRegistry.load(runtime_vars_path)
+    for message in registry_warnings:
+        LOGGER.warning("%s", message)
+    if registry.loaded_from:
+        LOGGER.info(
+            "运行时量注册表 %d 个来源 / %d 个量",
+            len(registry.sources),
+            len(registry.by_name),
+        )
 
     try:
         canvases = collect_canvases(args.targets, canvas_dir)
@@ -652,7 +1376,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             LOGGER.info("解析 %s", canvas_path)
             data = read_canvas(canvas_path)
-            payload = convert(canvas_path, canvas_dir, data)
+            payload = convert(canvas_path, canvas_dir, data, registry)
             stats = payload["stats"]
             LOGGER.info(
                 "  卡片 %d 张（文本 %d / 分组 %d），连线 %d 条",

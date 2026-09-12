@@ -130,7 +130,7 @@ namespace DungeonCardDesign.EditorTools
 
             AddRow(body, "品级", _card.rarity, null);
             AddRow(body, "类别", _card.category, null);
-            AddRow(body, "效果", _card.effect, null);
+            AddRow(body, "效果", EffectText(), null, true);
             if (_card.variables != null && !string.IsNullOrEmpty(_card.variables.raw))
             {
                 AddRow(body, "变量", _card.variables.raw, null);
@@ -138,6 +138,16 @@ namespace DungeonCardDesign.EditorTools
             AddRow(body, "获取", _card.acquisition, null);
             AddRow(body, "意图", _card.design_intent, null);
             AddRow(body, "升级", _card.combat_upgrade, new Color(0.95f, 0.78f, 0.35f));
+
+            // 词条放最底下，用单独的紫色标出来，扫一眼就能看出哪些卡带词条
+            if (_card.keywords != null && _card.keywords.Count > 0)
+            {
+                AddRow(
+                    body,
+                    "词条",
+                    string.Join(" · ", _card.keywords.ToArray()),
+                    new Color(0.78f, 0.62f, 1.00f));
+            }
 
             if (_card.missing_fields != null && _card.missing_fields.Length > 0)
             {
@@ -147,7 +157,23 @@ namespace DungeonCardDesign.EditorTools
             return body;
         }
 
-        static void AddRow(VisualElement parent, string label, string value, Color? valueColor)
+        /// <summary>
+        /// 节点上的效果文本。有 bindings 就按契约 §6 分色——节点不区分等级，
+        /// 统一按 Lv.1 渲染；没有 bindings（纯文字卡或旧 JSON）就显示原文。
+        /// </summary>
+        string EffectText()
+        {
+            if (_card.bindings == null || _card.bindings.effect_segments == null
+                || _card.bindings.effect_segments.Count == 0)
+            {
+                return _card.effect;
+            }
+            return CardSegmentRenderer.ToRichText(_card.bindings.effect_segments, 1, out _);
+        }
+
+        static void AddRow(
+            VisualElement parent, string label, string value, Color? valueColor,
+            bool richText = false)
         {
             if (string.IsNullOrEmpty(value))
             {
@@ -166,6 +192,7 @@ namespace DungeonCardDesign.EditorTools
             row.Add(key);
 
             var val = new Label(value);
+            val.enableRichText = richText;
             val.style.fontSize = 11f;
             val.style.flexShrink = 1f;
             val.style.whiteSpace = WhiteSpace.Normal;
