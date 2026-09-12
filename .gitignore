@@ -110,3 +110,6 @@ InitTestScene*.unity*
 dungeon-card-design/tools/python/
 # 每次导出都会重写的索引文件（列表页用，不是设计数据）
 dungeon-card-design/exports/_index.json
+
+# 就地改造场景前的自动备份（改完确认没问题就可以删）
+/Backups/
